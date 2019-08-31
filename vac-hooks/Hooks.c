@@ -9,6 +9,8 @@
 #include "Hooks.h"
 #include "Utils.h"
 
+#define LOG_FILTER TRUE
+
 HMODULE WINAPI Hooks_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
 {
     HMODULE result = LoadLibraryExW(lpLibFileName, hFile, dwFlags);
@@ -24,16 +26,24 @@ HMODULE WINAPI Hooks_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD d
     Utils_hookImport(lpLibFileName, "kernel32.dll", "GetProcessHeap", Hooks_GetProcessHeap);
     Utils_hookImport(lpLibFileName, "kernel32.dll", "CompareStringW", Hooks_CompareStringW);
     Utils_hookImport(lpLibFileName, "kernel32.dll", "lstrlenW", Hooks_lstrlenW);
-
+    Utils_hookImport(lpLibFileName, "kernel32.dll", "lstrcatW", Hooks_lstrcatW);
+    Utils_hookImport(lpLibFileName, "kernel32.dll", "GetSystemInfo", Hooks_GetSystemInfo);
+    
     return result;
 }
 
 FARPROC WINAPI Hooks_GetProcAddress(HMODULE hModule, LPCSTR lpProcName)
 {
     FARPROC result = GetProcAddress(hModule, lpProcName);
+    static UINT index = 0;
+    if (!strcmp(lpProcName, "LoadLibraryExA"))
+        index = 0;
 
-    Utils_log("%ws: GetProcAddress(hModule: %p, lpProcName: %s) -> FARPROC: %p\n",
-        Utils_getModuleName(_ReturnAddress()), hModule, lpProcName, result);
+#if !LOG_FILTER
+    Utils_log("%ws: GetProcAddress(hModule: %p, lpProcName: %s (%u)) -> FARPROC: %p\n",
+        Utils_getModuleName(_ReturnAddress()), hModule, lpProcName, index, result);
+#endif
+    index++;
 
     if (!strcmp(lpProcName, "GetProcAddress"))
         return (FARPROC)Hooks_GetProcAddress;
@@ -395,7 +405,9 @@ FARPROC WINAPI Hooks_GetProcAddress(HMODULE hModule, LPCSTR lpProcName)
         return (FARPROC)Hooks_RtlGetCompressionWorkSpaceSize;
     else if (!strcmp(lpProcName, "lstrlenW"))
         return (FARPROC)Hooks_lstrlenW;
-
+    else if (!strcmp(lpProcName, "lstrcatW"))
+        return (FARPROC)Hooks_lstrcatW;
+        
     Utils_log("Function not hooked: %s\n", lpProcName);
     return result;
 }
@@ -522,7 +534,7 @@ HANDLE WINAPI Hooks_CreateRemoteThread(HANDLE hProcess, LPSECURITY_ATTRIBUTES lp
 
 NTSTATUS NTAPI Hooks_NtOpenProcess(PHANDLE ProcessHandle, ACCESS_MASK DesiredAccess, PVOID ObjectAttributes, PVOID ClientId)
 {
-    NTSTATUS(NTAPI* NtOpenProcess)(PHANDLE, ACCESS_MASK, PVOID, PVOID) = (PVOID)GetProcAddress(GetModuleHandleW(L"ntdll"), "NtOpenProcess");
+    extern NTSTATUS(NTAPI NtOpenProcess)(PHANDLE, ACCESS_MASK, PVOID, PVOID);
     NTSTATUS result = NtOpenProcess(ProcessHandle, DesiredAccess, ObjectAttributes, ClientId);
 
     Utils_log("%ws: NtOpenProcess(ProcessHandle: %p, DesiredAccess: %d, ObjectAttributes: %p, ClientId: %p) -> NTSTATUS: %ld\n",
@@ -795,8 +807,10 @@ HANDLE WINAPI Hooks_GetCurrentProcess(VOID)
 {
     HANDLE result = GetCurrentProcess();
 
+#if !LOG_FILTER
     Utils_log("%ws: GetCurrentProcess() -> HANDLE: %p\n",
         Utils_getModuleName(_ReturnAddress()), result);
+#endif
 
     return result;;
 }
@@ -1194,8 +1208,8 @@ BOOL WINAPI Hooks_Process32FirstW(HANDLE hSnapshot, LPPROCESSENTRY32W lppe)
 {
     BOOL result = Process32FirstW(hSnapshot, lppe);
 
-    Utils_log("%ws: Process32FirstW(hSnapshot: %p, lppe: %p) -> BOOL: %d\n",
-        Utils_getModuleName(_ReturnAddress()), hSnapshot, lppe, result);
+    Utils_log("%ws: Process32FirstW(hSnapshot: %p, lppe: %p {th32ProcessID: %d}) -> BOOL: %d\n",
+        Utils_getModuleName(_ReturnAddress()), hSnapshot, lppe, lppe->th32ProcessID, result);
 
     return result;
 }
@@ -1204,8 +1218,8 @@ BOOL WINAPI Hooks_Process32NextW(HANDLE hSnapshot, LPPROCESSENTRY32W lppe)
 {
     BOOL result = Process32NextW(hSnapshot, lppe);
 
-    Utils_log("%ws: Process32NextW(hSnapshot: %p, lppe: %p) -> BOOL: %d\n",
-        Utils_getModuleName(_ReturnAddress()), hSnapshot, lppe, result);
+    Utils_log("%ws: Process32NextW(hSnapshot: %p, lppe: %p {th32ProcessID: %d}) -> BOOL: %d\n",
+        Utils_getModuleName(_ReturnAddress()), hSnapshot, lppe, lppe->th32ProcessID, result);
 
     return result;
 }
@@ -1222,12 +1236,20 @@ BOOL WINAPI Hooks_WriteFile(HANDLE hFile, LPCVOID lpBuffer, DWORD nNumberOfBytes
 
 NTSTATUS NTAPI Hooks_NtQueryVirtualMemory(HANDLE ProcessHandle, PVOID BaseAddress, DWORD MemoryInformationClass, PVOID Buffer, ULONG Length, PULONG ResultLength)
 {
-    NTSTATUS(NTAPI* NtQueryVirtualMemory)(HANDLE, PVOID, DWORD, PVOID, ULONG, PULONG) = (PVOID)GetProcAddress(GetModuleHandleW(L"ntdll"), "NtQueryVirtualMemory");
+    extern NTSTATUS(NTAPI NtQueryVirtualMemory)(HANDLE, PVOID, DWORD, PVOID, ULONG, PULONG);
     NTSTATUS result = NtQueryVirtualMemory(ProcessHandle, BaseAddress, MemoryInformationClass, Buffer, Length, ResultLength);
 
-    Utils_log("%ws: NtQueryVirtualMemory(ProcessHandle: %p, BaseAddress: %p, MemoryInformationClass: %d, Buffer: %p, Length: %lu, ResultLength: %p) -> NTSTATUS: 0x%lx\n",
-        Utils_getModuleName(_ReturnAddress()), ProcessHandle, BaseAddress, MemoryInformationClass, Buffer, Length, ResultLength, result);
+    if (!MemoryInformationClass) {
+        WCHAR moduleName[MAX_PATH] = { 0 };
+        MEMORY_BASIC_INFORMATION* mbi = Buffer;
+        GetModuleFileNameExW(ProcessHandle, mbi->AllocationBase, moduleName, MAX_PATH);
 
+        Utils_log("%ws: NtQueryVirtualMemory(ProcessHandle: %p, BaseAddress: %p, MemoryInformationClass: %d, Buffer: %p {BaseAddress: %p, AllocationBase: %p (%ws), AllocationProtect: %d, RegionSize: %d, State: %d, Protect: %d, Type: %d}, Length: %lu, ResultLength: %p) -> NTSTATUS: 0x%lx\n",
+            Utils_getModuleName(_ReturnAddress()), ProcessHandle, BaseAddress, MemoryInformationClass, Buffer, mbi->BaseAddress, mbi->AllocationBase, moduleName, mbi->AllocationProtect, mbi->RegionSize, mbi->State, mbi->Protect, mbi->Type, Length, ResultLength, result);
+    } else {
+        Utils_log("%ws: NtQueryVirtualMemory(ProcessHandle: %p, BaseAddress: %p, MemoryInformationClass: %d, Buffer: %p, Length: %lu, ResultLength: %p) -> NTSTATUS: 0x%lx\n",
+            Utils_getModuleName(_ReturnAddress()), ProcessHandle, BaseAddress, MemoryInformationClass, Buffer, Length, ResultLength, result);
+    }
     return result;
 }
 
@@ -1281,7 +1303,7 @@ NTSTATUS NTAPI Hooks_NtQueryObject(HANDLE Handle, OBJECT_INFORMATION_CLASS Objec
 
 NTSTATUS NTAPI Hooks_NtFsControlFile(HANDLE FileHandle, HANDLE Event, PIO_APC_ROUTINE ApcRoutine, PVOID ApcContext, PIO_STATUS_BLOCK IoStatusBlock, ULONG FsControlCode, PVOID InputBuffer, ULONG InputBufferLength, PVOID OutputBuffer, ULONG OutputBufferLength)
 {
-    NTSTATUS(NTAPI* NtFsControlFile)(HANDLE, HANDLE, PIO_APC_ROUTINE, PVOID, PIO_STATUS_BLOCK, ULONG, PVOID, ULONG, PVOID, ULONG) = (PVOID)GetProcAddress(GetModuleHandleW(L"ntdll"), "NtFsControlFile");
+    extern NTSTATUS(NTAPI NtFsControlFile)(HANDLE, HANDLE, PIO_APC_ROUTINE, PVOID, PIO_STATUS_BLOCK, ULONG, PVOID, ULONG, PVOID, ULONG);
     NTSTATUS result = NtFsControlFile(FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, FsControlCode, InputBuffer, InputBufferLength, OutputBuffer, OutputBufferLength);
 
     Utils_log("%ws: NtFsControlFile(FileHandle: %p, Event: %p, ApcRoutine: %p, ApcContext: %p, IoStatusBlock: %p, FsControlCode: %lu, InputBuffer: %p, InputBufferLength: %lu, OutputBuffer: %p, OutputBufferLength: %lu) -> NTSTATUS: 0x%lx\n",
@@ -1332,7 +1354,7 @@ BOOL WINAPI Hooks_GetUserProfileDirectoryW(HANDLE hToken, LPWSTR lpProfileDir, L
 
 NTSTATUS NTAPI Hooks_NtDuplicateObject(HANDLE SourceProcessHandle, PHANDLE SourceHandle, HANDLE TargetProcessHandle, PHANDLE TargetHandle, ACCESS_MASK DesiredAccess, BOOLEAN InheritHandle, ULONG Options)
 {
-    NTSTATUS(NTAPI* NtDuplicateObject)(HANDLE, PHANDLE, HANDLE, PHANDLE, ACCESS_MASK, BOOLEAN, ULONG) = (PVOID)GetProcAddress(GetModuleHandleW(L"ntdll"), "NtDuplicateObject");
+    extern NTSTATUS(NTAPI NtDuplicateObject)(HANDLE, PHANDLE, HANDLE, PHANDLE, ACCESS_MASK, BOOLEAN, ULONG);
     NTSTATUS result = NtDuplicateObject(SourceProcessHandle, SourceHandle, TargetProcessHandle, TargetHandle, DesiredAccess, InheritHandle, Options);
 
     Utils_log("%ws: NtDuplicateObject(SourceProcessHandle: %p, SourceHandle: %p, TargetProcessHandle: %p, TargetHandle: %p, DesiredAccess: %d, InheritHandle: %d, Options: %lu) -> NTSTATUS: 0x%lx\n",
@@ -1353,7 +1375,7 @@ HANDLE WINAPI Hooks_OpenFileMappingW(DWORD dwDesiredAccess, BOOL bInheritHandle,
 
 NTSTATUS NTAPI Hooks_RtlDecompressBufferEx(USHORT CompressionFormat, PUCHAR UncompressedBuffer, ULONG UncompressedBufferSize, PUCHAR CompressedBuffer, ULONG CompressedBufferSize, PULONG FinalUncompressedSize, PVOID WorkSpace)
 {
-    NTSTATUS(NTAPI* RtlDecompressBufferEx)(USHORT, PUCHAR, ULONG, PUCHAR, ULONG, PULONG, PVOID) = (PVOID)GetProcAddress(GetModuleHandleW(L"ntdll"), "RtlDecompressBufferEx");
+    extern NTSTATUS(NTAPI RtlDecompressBufferEx)(USHORT, PUCHAR, ULONG, PUCHAR, ULONG, PULONG, PVOID);
     NTSTATUS result = RtlDecompressBufferEx(CompressionFormat, UncompressedBuffer, UncompressedBufferSize, CompressedBuffer, CompressedBufferSize, FinalUncompressedSize, WorkSpace);
 
     Utils_log("%ws: RtlDecompressBufferEx(CompressionFormat: %u, UncompressedBuffer: %p, UncompressedBufferSize: %lu, CompressedBuffer: %p, CompressedBufferSize: %lu, FinalUncompressedSize: %p, WorkSpace: %p) -> NTSTATUS: 0x%lx\n",
@@ -1516,8 +1538,10 @@ BOOL WINAPI Hooks_IsWow64Process(HANDLE hProcess, PBOOL Wow64Process)
 {
     BOOL result = IsWow64Process(hProcess, Wow64Process);
 
+#if !LOG_FILTER
     Utils_log("%ws: IsWow64Process(hProcess: %p, Wow64Process: %d) -> BOOL: %d\n",
         Utils_getModuleName(_ReturnAddress()), hProcess, *Wow64Process, result);
+#endif
 
     return result;
 }
@@ -1546,8 +1570,10 @@ HANDLE WINAPI Hooks_GetProcessHeap(VOID)
 {
     HANDLE result = GetProcessHeap();
 
+#if !LOG_FILTER
     Utils_log("%ws: GetProcessHeap() -> HANDLE: %p\n",
         Utils_getModuleName(_ReturnAddress()), result);
+#endif
 
     return result;
 }
@@ -1654,7 +1680,7 @@ BOOL WINAPI Hooks_FindVolumeClose(HANDLE hFindVolume)
 
 NTSTATUS NTAPI Hooks_NtReadVirtualMemory(HANDLE ProcessHandle, PVOID BaseAddress, PVOID Buffer, ULONG NumberOfBytesToRead, PULONG NumberOfBytesRead)
 {
-    NTSTATUS(NTAPI* NtReadVirtualMemory)(HANDLE, PVOID, PVOID, ULONG, PULONG) = (PVOID)GetProcAddress(GetModuleHandleW(L"ntdll"), "NtReadVirtualMemory");
+    extern NTSTATUS(NTAPI NtReadVirtualMemory)(HANDLE, PVOID, PVOID, ULONG, PULONG);
     NTSTATUS result = NtReadVirtualMemory(ProcessHandle, BaseAddress, Buffer, NumberOfBytesToRead, NumberOfBytesRead);
 
     Utils_log("%ws: NtReadVirtualMemory(ProcessHandle: %p, BaseAddress: %p, Buffer: %p, NumberOfBytesToRead: %lu, NumberOfBytesRead: %lu) -> NTSTATUS: 0x%lx\n",
@@ -1665,7 +1691,7 @@ NTSTATUS NTAPI Hooks_NtReadVirtualMemory(HANDLE ProcessHandle, PVOID BaseAddress
 
 NTSTATUS NTAPI Hooks_NtOpenDirectoryObject(PHANDLE DirectoryHandle, ACCESS_MASK DesiredAccess, POBJECT_ATTRIBUTES ObjectAttributes)
 {
-    NTSTATUS(NTAPI* NtOpenDirectoryObject)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES) = (PVOID)GetProcAddress(GetModuleHandleW(L"ntdll"), "NtOpenDirectoryObject");
+    extern NTSTATUS(NTAPI NtOpenDirectoryObject)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
     NTSTATUS result = NtOpenDirectoryObject(DirectoryHandle, DesiredAccess, ObjectAttributes);
 
     Utils_log("%ws: NtOpenDirectoryObject(DirectoryHandle: %p, DesiredAccess: %d, ObjectAttributes: %p) -> NTSTATUS: 0x%lx\n",
@@ -1856,8 +1882,10 @@ HMODULE WINAPI Hooks_LoadLibraryExA(LPCSTR lpLibFileName, HANDLE hFile, DWORD dw
 {
     HMODULE result = LoadLibraryExA(lpLibFileName, hFile, dwFlags);
 
+#if !LOG_FILTER
     Utils_log("%ws: LoadLibraryExA(lpLibFileName: %s, hFile: %p, dwFlags: %d) -> HMODULE: %p\n",
         Utils_getModuleName(_ReturnAddress()), lpLibFileName, hFile, dwFlags, result);
+#endif
 
     return result;
 }
@@ -1866,15 +1894,17 @@ BOOL WINAPI Hooks_FreeLibrary(HMODULE hLibModule)
 {
     BOOL result = FreeLibrary(hLibModule);
 
+#if !LOG_FILTER
     Utils_log("%ws: FreeLibrary(hLibModule: %p) -> BOOL: %d\n",
         Utils_getModuleName(_ReturnAddress()), hLibModule, result);
+#endif
 
     return result;
 }
 
 NTSTATUS NTAPI Hooks_NtOpenSection(PHANDLE SectionHandle, ACCESS_MASK DesiredAccess, POBJECT_ATTRIBUTES ObjectAttributes)
 {
-    NTSTATUS(NTAPI* NtOpenSection)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES) = (PVOID)GetProcAddress(GetModuleHandleW(L"ntdll"), "NtOpenSection");
+    extern NTSTATUS(NTAPI NtOpenSection)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
     NTSTATUS result = NtOpenSection(SectionHandle, DesiredAccess, ObjectAttributes);
 
     Utils_log("%ws: NtOpenSection(SectionHandle: %p, DesiredAccess: %d, ObjectAttributes: %p) -> NTSTATUS: 0x%lx\n",
@@ -1885,7 +1915,7 @@ NTSTATUS NTAPI Hooks_NtOpenSection(PHANDLE SectionHandle, ACCESS_MASK DesiredAcc
 
 NTSTATUS NTAPI Hooks_NtQuerySection(HANDLE SectionHandle, DWORD InformationClass, PVOID InformationBuffer, ULONG InformationBufferSize, PULONG ResultLength)
 {
-    NTSTATUS(NTAPI* NtQuerySection)(HANDLE, DWORD, PVOID, ULONG, PULONG) = (PVOID)GetProcAddress(GetModuleHandleW(L"ntdll"), "NtQuerySection");
+    extern NTSTATUS(NTAPI NtQuerySection)(HANDLE, DWORD, PVOID, ULONG, PULONG);
     NTSTATUS result = NtQuerySection(SectionHandle, InformationClass, InformationBuffer, InformationBufferSize, ResultLength);
 
     Utils_log("%ws: NtQuerySection(SectionHandle: %p, InformationClass: %d, InformationBuffer: %p, InformationBufferSize: %lu, ResultLength: %lu) -> NTSTATUS: 0x%lx\n",
@@ -2016,7 +2046,7 @@ BOOL WINAPI Hooks_CertCloseStore(HCERTSTORE hCertStore, DWORD dwFlags)
 
 NTSTATUS NTAPI Hooks_NtMapViewOfSection(HANDLE SectionHandle, HANDLE ProcessHandle, PVOID* BaseAddress, ULONG ZeroBits, ULONG CommitSize, PLARGE_INTEGER SectionOffset, PULONG ViewSize, DWORD InheritDisposition, ULONG AllocationType, ULONG Protect)
 {
-    NTSTATUS(NTAPI* NtMapViewOfSection)(HANDLE, HANDLE, PVOID*, ULONG, ULONG, PLARGE_INTEGER, PULONG, DWORD, ULONG, ULONG) = (PVOID)GetProcAddress(GetModuleHandleW(L"ntdll"), "NtMapViewOfSection");
+    extern NTSTATUS(NTAPI NtMapViewOfSection)(HANDLE, HANDLE, PVOID*, ULONG, ULONG, PLARGE_INTEGER, PULONG, DWORD, ULONG, ULONG);
     NTSTATUS result = NtMapViewOfSection(SectionHandle, ProcessHandle, BaseAddress, ZeroBits, CommitSize, SectionOffset, ViewSize, InheritDisposition, AllocationType, Protect);
 
     Utils_log("%ws: NtMapViewOfSection(SectionHandle: %p, ProcessHandle: %p, BaseAddress: %p, ZeroBits: %lu, CommitSize: %lu, SectionOffset: %p, ViewSize: %p, InheritDisposition: %d, AllocationType: %lu, Protect: %lu) -> NTSTATUS: 0x%lx\n",
@@ -2107,7 +2137,7 @@ int WINAPI Hooks_WideCharToMultiByte(UINT CodePage, DWORD dwFlags, LPCWCH lpWide
 
 BOOL WINAPI Hooks_GetVersionExA(LPOSVERSIONINFOA lpVersionInformation)
 {
-    BOOL(WINAPI* GetVersionExA)(LPOSVERSIONINFOA) = (PVOID)GetProcAddress(GetModuleHandleW(L"kernel32"), "GetVersionExA");
+    extern BOOL(WINAPI GetVersionExA)(LPOSVERSIONINFOA);
     BOOL result = GetVersionExA(lpVersionInformation);
 
     Utils_log("%ws: GetVersionExA(lpVersionInformation: %p {dwOSVersionInfoSize: %d, dwMajorVersion : %d, dwMinorVersion: %d, dwBuildNumber: %d, dwPlatformId :%d}) -> BOOL: %d\n",
@@ -2118,7 +2148,7 @@ BOOL WINAPI Hooks_GetVersionExA(LPOSVERSIONINFOA lpVersionInformation)
 
 BOOL WINAPI Hooks_GetVersionExW(LPOSVERSIONINFOW lpVersionInformation)
 {
-    BOOL(WINAPI* GetVersionExW)(LPOSVERSIONINFOW) = (PVOID)GetProcAddress(GetModuleHandleW(L"kernel32"), "GetVersionExW");
+    extern BOOL(WINAPI GetVersionExW)(LPOSVERSIONINFOW);
     BOOL result = GetVersionExW(lpVersionInformation);
 
     Utils_log("%ws: GetVersionExW(lpVersionInformation: %p {dwOSVersionInfoSize: %d, dwMajorVersion : %d, dwMinorVersion: %d, dwBuildNumber: %d, dwPlatformId :%d}) -> BOOL: %d\n",
@@ -2167,7 +2197,7 @@ VOID WINAPI Hooks_GetSystemInfo(LPSYSTEM_INFO lpSystemInfo)
 
 NTSTATUS NTAPI Hooks_NtQueryDirectoryObject(HANDLE DirectoryObjectHandle, PVOID DirObjInformation, ULONG BufferLength, BOOLEAN GetNextIndex, BOOLEAN IgnoreInputIndex, PULONG ObjectIndex, PULONG DataWritten)
 {
-    NTSTATUS(NTAPI* NtQueryDirectoryObject)(HANDLE, PVOID, ULONG, BOOLEAN, BOOLEAN, PULONG, PULONG) = (PVOID)GetProcAddress(GetModuleHandleW(L"ntdll"), "NtQueryDirectoryObject");
+    extern NTSTATUS(NTAPI NtQueryDirectoryObject)(HANDLE, PVOID, ULONG, BOOLEAN, BOOLEAN, PULONG, PULONG);
     NTSTATUS result = NtQueryDirectoryObject(DirectoryObjectHandle, DirObjInformation, BufferLength, GetNextIndex, IgnoreInputIndex, ObjectIndex, DataWritten);
 
     Utils_log("%ws: NtQueryDirectoryObject(DirectoryObjectHandle: %p, DirObjInformation: %p, BufferLength: %lu, GetNextIndex: %d, IgnoreInputIndex: %d, ObjectIndex: %lu, DataWritten: %lu) -> NTSTATUS: 0x%lx\n",
@@ -2178,7 +2208,7 @@ NTSTATUS NTAPI Hooks_NtQueryDirectoryObject(HANDLE DirectoryObjectHandle, PVOID 
 
 NTSTATUS NTAPI Hooks_RtlGetCompressionWorkSpaceSize(ULONG CompressionFormat, PULONG pNeededBufferSize, PULONG pUnknown)
 {
-    NTSTATUS(NTAPI* RtlGetCompressionWorkSpaceSize)(ULONG, PULONG, PULONG) = (PVOID)GetProcAddress(GetModuleHandleW(L"ntdll"), "RtlGetCompressionWorkSpaceSize");
+    extern NTSTATUS(NTAPI RtlGetCompressionWorkSpaceSize)(ULONG, PULONG, PULONG);
     NTSTATUS result = RtlGetCompressionWorkSpaceSize(CompressionFormat, pNeededBufferSize, pUnknown);
 
     Utils_log("%ws: RtlGetCompressionWorkSpaceSize(CompressionFormat: %lu, pNeededBufferSize: %lu, pUnknown: %lu) -> NTSTATUS: 0x%lx\n",
@@ -2193,6 +2223,16 @@ int WINAPI Hooks_lstrlenW(LPCWSTR lpString)
 
     Utils_log("%ws: lstrlenW(lpString: %ws) -> int: %d\n",
         Utils_getModuleName(_ReturnAddress()), lpString, result);
+
+    return result;
+}
+
+LPWSTR WINAPI Hooks_lstrcatW(LPWSTR lpString1, LPCWSTR lpString2)
+{
+    LPWSTR result = lstrcatW(lpString1, lpString2);
+
+    Utils_log("%ws: lstrcatW(lpString1: %ws, lpString2: %ws) -> LPWSTR: %ws\n",
+        Utils_getModuleName(_ReturnAddress()), lpString1, lpString2, result);
 
     return result;
 }
