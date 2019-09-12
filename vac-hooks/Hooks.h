@@ -1,8 +1,10 @@
 #pragma once
 
-#include <dbghelp.h>
-#include <Windows.h>
+#include <WinSock2.h>
+#include <WS2tcpip.h>
 #include <iphlpapi.h>
+#include <Windows.h>
+#include <dbghelp.h>
 #include <Psapi.h>
 #define SECURITY_WIN32
 #include <security.h>
@@ -197,3 +199,5 @@ LPWSTR            WINAPI     Hooks_lstrcatW(LPWSTR, LPCWSTR);
 NTSTATUS          NTAPI      Hooks_NtWow64QueryVirtualMemory64(HANDLE, PVOID64, DWORD, PVOID, ULONG64, PULONG64);
 NTSTATUS          NTAPI      Hooks_NtWow64ReadVirtualMemory64(HANDLE, PVOID64, PVOID, ULONG64, PULONG64);
 NTSTATUS          NTAPI      Hooks_NtWow64QueryInformationProcess64(HANDLE, PROCESSINFOCLASS, PVOID, ULONG, PULONG);
+ULONG             WINAPI     Hooks_GetTcp6Table(PMIB_TCP6TABLE, PULONG, BOOL);
+ULONG             WINAPI     Hooks_GetUdp6Table(PMIB_UDP6TABLE, PULONG, BOOL);
