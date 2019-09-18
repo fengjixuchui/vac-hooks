@@ -19,6 +19,10 @@ HMODULE WINAPI Hooks_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD d
     Utils_log("%ws: LoadLibraryExW(lpLibFileName: %ws, hFile: %p, dwFlags: %d) -> HMODULE: %p\n",
         Utils_getModuleName(_ReturnAddress()), lpLibFileName, hFile, dwFlags, result);
 
+    PCSTR timestamp = Utils_getModuleTimestamp(result);
+    if (timestamp)
+        Utils_log("Loaded module %ws with timestamp: %s", lpLibFileName, timestamp);
+
     Utils_hookImport(lpLibFileName, "kernel32.dll", "GetProcAddress", Hooks_GetProcAddress);
     Utils_hookImport(lpLibFileName, "kernel32.dll", "VirtualAlloc", Hooks_VirtualAlloc);
     Utils_hookImport(lpLibFileName, "kernel32.dll", "VirtualFree", Hooks_VirtualFree);
@@ -419,6 +423,20 @@ FARPROC WINAPI Hooks_GetProcAddress(HMODULE hModule, LPCSTR lpProcName)
             return (FARPROC)Hooks_GetTcp6Table;
         else if (!strcmp(lpProcName, "GetUdp6Table"))
             return (FARPROC)Hooks_GetUdp6Table;
+        else if (!strcmp(lpProcName, "GetVersion"))
+            return (FARPROC)Hooks_GetVersion;
+        else if (!strcmp(lpProcName, "GetNativeSystemInfo"))
+            return (FARPROC)Hooks_GetNativeSystemInfo;
+        else if (!strcmp(lpProcName, "SnmpExtensionInit"))
+            return (FARPROC)Hooks_SnmpExtensionInit;
+        else if (!strcmp(lpProcName, "SnmpExtensionQuery"))
+            return (FARPROC)Hooks_SnmpExtensionQuery;
+        else if (!strcmp(lpProcName, "SnmpUtilMemAlloc"))
+            return (FARPROC)Hooks_SnmpUtilMemAlloc;
+        else if (!strcmp(lpProcName, "SnmpUtilVarBindFree"))
+            return (FARPROC)Hooks_SnmpUtilVarBindFree;
+        else if (!strcmp(lpProcName, "SnmpExtensionClose"))
+            return (FARPROC)Hooks_SnmpExtensionClose;
             
         Utils_log("Function not hooked: %s\n", lpProcName);
     } else {
@@ -2205,7 +2223,7 @@ BOOL WINAPI Hooks_CertFreeCertificateContext(PCCERT_CONTEXT pCertContext)
 VOID WINAPI Hooks_GetSystemInfo(LPSYSTEM_INFO lpSystemInfo)
 {
     GetSystemInfo(lpSystemInfo);
-    
+
     Utils_log("%ws: GetSystemInfo(lpSystemInfo: %p) -> VOID\n",
         Utils_getModuleName(_ReturnAddress()), lpSystemInfo);
 }
@@ -2311,4 +2329,79 @@ ULONG WINAPI Hooks_GetUdp6Table(PMIB_UDP6TABLE Udp6Table, PULONG SizePointer, BO
         Utils_getModuleName(_ReturnAddress()), Udp6Table, SAFE_PTR(SizePointer, 0), Order, result);
 
     return result;
+}
+
+DWORD WINAPI Hooks_GetVersion(VOID)
+{
+    extern DWORD(WINAPI GetVersion)(VOID);
+    DWORD result = GetVersion();
+
+    Utils_log("%ws: GetVersion() -> DWORD: %d\n",
+        Utils_getModuleName(_ReturnAddress()), result);
+
+    return result;
+}
+
+VOID WINAPI Hooks_GetNativeSystemInfo(LPSYSTEM_INFO lpSystemInfo)
+{
+    GetNativeSystemInfo(lpSystemInfo);
+
+    Utils_log("%ws: GetNativeSystemInfo(lpSystemInfo: %p) -> VOID\n",
+        Utils_getModuleName(_ReturnAddress()), lpSystemInfo);
+}
+
+BOOL WINAPI Hooks_SnmpExtensionInit(DWORD dwUptimeReference, HANDLE* phSubagentTrapEvent, AsnObjectIdentifier* pFirstSupportedRegion)
+{
+    BOOL(WINAPI* SnmpExtensionInit)(DWORD, HANDLE*, AsnObjectIdentifier*) = (PVOID)GetProcAddress(GetModuleHandleW(L"inetmib1"), "SnmpExtensionInit");
+    
+    BOOL result = SnmpExtensionInit(dwUptimeReference, phSubagentTrapEvent, pFirstSupportedRegion);
+
+    Utils_log("%ws: SnmpExtensionInit(dwUptimeReference: %d, phSubagentTrapEvent: %p, pFirstSupportedRegion: %p) -> BOOL: %d\n",
+        Utils_getModuleName(_ReturnAddress()), dwUptimeReference, phSubagentTrapEvent, pFirstSupportedRegion, result);
+
+    return result;
+}
+
+BOOL WINAPI Hooks_SnmpExtensionQuery(BYTE bPduType, SnmpVarBindList* pVarBindList, AsnInteger32* pErrorStatus, AsnInteger32* pErrorIndex)
+{
+    BOOL(WINAPI* SnmpExtensionQuery)(BYTE, SnmpVarBindList*, AsnInteger32*, AsnInteger32*) = (PVOID)GetProcAddress(GetModuleHandleW(L"inetmib1"), "SnmpExtensionQuery");
+
+    BOOL result = SnmpExtensionQuery(bPduType, pVarBindList, pErrorStatus, pErrorIndex);
+
+    Utils_log("%ws: SnmpExtensionQuery(bPduType: %d, pVarBindList: %p, pErrorStatus: %p, pErrorIndex: %p) -> BOOL: %d\n",
+        Utils_getModuleName(_ReturnAddress()), bPduType, pVarBindList, pErrorStatus, pErrorIndex, result);
+
+    return result;
+}
+
+LPVOID WINAPI Hooks_SnmpUtilMemAlloc(UINT nBytes)
+{
+    LPVOID(WINAPI* SnmpUtilMemAlloc)(UINT) = (PVOID)GetProcAddress(GetModuleHandleW(L"snmpapi"), "SnmpUtilMemAlloc");
+
+    LPVOID result = SnmpUtilMemAlloc(nBytes);
+
+    Utils_log("%ws: SnmpUtilMemAlloc(nBytes: %u) -> LPVOID: %p\n",
+        Utils_getModuleName(_ReturnAddress()), nBytes, result);
+
+    return result;
+}
+
+VOID WINAPI Hooks_SnmpUtilVarBindFree(SnmpVarBind* pVb)
+{
+    VOID(WINAPI* SnmpUtilVarBindFree)(SnmpVarBind*) = (PVOID)GetProcAddress(GetModuleHandleW(L"snmpapi"), "SnmpUtilVarBindFree");
+
+    SnmpUtilVarBindFree(pVb);
+
+    Utils_log("%ws: SnmpUtilVarBindFree(pVb: %p) -> VOID\n",
+        Utils_getModuleName(_ReturnAddress()), pVb);
+}
+
+VOID WINAPI Hooks_SnmpExtensionClose(VOID)
+{
+    VOID(WINAPI* SnmpExtensionClose)(VOID) = (PVOID)GetProcAddress(GetModuleHandleW(L"inetmib1"), "SnmpExtensionClose");
+
+    SnmpExtensionClose();
+
+    Utils_log("%ws: SnmpExtensionClose() -> VOID\n",
+        Utils_getModuleName(_ReturnAddress()));
 }
