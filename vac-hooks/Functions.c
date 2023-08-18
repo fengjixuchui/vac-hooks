@@ -106,6 +106,7 @@ static CONST FunctionBinding functions[] = {
     FUNCTION(GetUserProfileDirectoryW),
     FUNCTION(NtDuplicateObject),
     FUNCTION(OpenFileMappingW),
+    FUNCTION(OpenFileMappingA),
     FUNCTION(RtlDecompressBufferEx),
     FUNCTION(GetTcpTable),
     FUNCTION(CloseHandle),
@@ -203,11 +204,16 @@ static CONST FunctionBinding functions[] = {
     FUNCTION(SnmpUtilMemAlloc),
     FUNCTION(SnmpUtilVarBindFree),
     FUNCTION(SnmpExtensionClose),
+    FUNCTION(CharUpperW),
+    FUNCTION(lstrcmpiW),
+    FUNCTION(wsprintfW),
+    FUNCTION(wsprintfA),
+    FUNCTION(ExitProcess)
 };
 
 FARPROC Functions_find(PCSTR name)
 {
-    for (int i = 0; i < sizeof(functions) / sizeof(functions[0]); i++)
+    for (INT i = 0; i < _countof(functions); ++i)
         if (!strcmp(functions[i].name, name))
             return (FARPROC)functions[i].function;
     return NULL;

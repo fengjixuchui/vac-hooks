@@ -11,7 +11,9 @@
 #include "Functions.h"
 #include "Utils.h"
 
-#define LOG_FILTER FALSE
+#define LOG_FILTER TRUE
+
+// TODO: Hook HeapReAlloc
 
 HMODULE WINAPI Hooks_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
 {
@@ -35,8 +37,24 @@ HMODULE WINAPI Hooks_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD d
     Utils_hookImport(lpLibFileName, "kernel32.dll", "lstrcatW", Hooks_lstrcatW);
     Utils_hookImport(lpLibFileName, "kernel32.dll", "GetSystemInfo", Hooks_GetSystemInfo);
     Utils_hookImport(lpLibFileName, "kernel32.dll", "lstrcmpiW", Hooks_lstrcmpiW);
+    Utils_hookImport(lpLibFileName, "kernel32.dll", "HeapAlloc", Hooks_HeapAlloc);
+    Utils_hookImport(lpLibFileName, "kernel32.dll", "HeapFree", Hooks_HeapFree);
+    Utils_hookImport(lpLibFileName, "kernel32.dll", "UnmapViewOfFile", Hooks_UnmapViewOfFile);
+    Utils_hookImport(lpLibFileName, "kernel32.dll", "MapViewOfFile", Hooks_MapViewOfFile);
+    Utils_hookImport(lpLibFileName, "kernel32.dll", "CloseHandle", Hooks_CloseHandle);
+    Utils_hookImport(lpLibFileName, "kernel32.dll", "GetCurrentProcessId", Hooks_GetCurrentProcessId);
+    Utils_hookImport(lpLibFileName, "kernel32.dll", "GetCurrentProcess", Hooks_GetCurrentProcess);
+    Utils_hookImport(lpLibFileName, "kernel32.dll", "OpenFileMappingA", Hooks_OpenFileMappingA);
+    Utils_hookImport(lpLibFileName, "kernel32.dll", "ReadFile", Hooks_ReadFile);
+    Utils_hookImport(lpLibFileName, "kernel32.dll", "CreateFileW", Hooks_CreateFileW);
+    Utils_hookImport(lpLibFileName, "kernel32.dll", "WideCharToMultiByte", Hooks_WideCharToMultiByte);
+    Utils_hookImport(lpLibFileName, "kernel32.dll", "GetProcessTimes", Hooks_GetProcessTimes);
+    Utils_hookImport(lpLibFileName, "kernel32.dll", "ExitProcess", Hooks_ExitProcess);
+    Utils_hookImport(lpLibFileName, "kernel32.dll", "GetLastError", Hooks_GetLastError);
+    
     Utils_hookImport(lpLibFileName, "user32.dll", "CharUpperW", Hooks_CharUpperW);
     Utils_hookImport(lpLibFileName, "user32.dll", "wsprintfW", Hooks_wsprintfW);
+    Utils_hookImport(lpLibFileName, "user32.dll", "wsprintfA", Hooks_wsprintfA);
 
     return result;
 }
@@ -1027,6 +1045,16 @@ HANDLE WINAPI Hooks_OpenFileMappingW(DWORD dwDesiredAccess, BOOL bInheritHandle,
     return result;
 }
 
+HANDLE WINAPI Hooks_OpenFileMappingA(DWORD dwDesiredAccess, BOOL bInheritHandle, LPCSTR lpName)
+{
+    HANDLE result = OpenFileMappingA(dwDesiredAccess, bInheritHandle, lpName);
+
+    Utils_log("%ws: OpenFileMappingA(dwDesiredAccess: %d, bInheritHandle: %d, lpName: %s) -> HANDLE: %p\n",
+        Utils_getModuleName(_ReturnAddress()), dwDesiredAccess, bInheritHandle, lpName, result);
+
+    return result;
+}
+
 NTSTATUS NTAPI Hooks_RtlDecompressBufferEx(USHORT CompressionFormat, PUCHAR UncompressedBuffer, ULONG UncompressedBufferSize, PUCHAR CompressedBuffer, ULONG CompressedBufferSize, PULONG FinalUncompressedSize, PVOID WorkSpace)
 {
     extern NTSTATUS(NTAPI RtlDecompressBufferEx)(USHORT, PUCHAR, ULONG, PUCHAR, ULONG, PULONG, PVOID);
@@ -1306,8 +1334,10 @@ LPVOID WINAPI Hooks_HeapAlloc(HANDLE hHeap, DWORD dwFlags, SIZE_T dwBytes)
 {
     LPVOID result = HeapAlloc(hHeap, dwFlags, dwBytes);
 
+#if !LOG_FILTER
     Utils_log("%ws: HeapAlloc(hHeap: %p, dwFlags: %d, dwBytes: %lu) -> LPVOID: %p\n",
         Utils_getModuleName(_ReturnAddress()), hHeap, dwFlags, dwBytes, result);
+#endif
 
     return result;
 }
@@ -1316,8 +1346,10 @@ BOOL WINAPI Hooks_HeapFree(HANDLE hHeap, DWORD dwFlags, LPVOID lpMem)
 {
     BOOL result = HeapFree(hHeap, dwFlags, lpMem);
 
+#if !LOG_FILTER
     Utils_log("%ws: HeapFree(hHeap: %p, dwFlags: %d, lpMem: %p) -> BOOL: %d\n",
         Utils_getModuleName(_ReturnAddress()), hHeap, dwFlags, lpMem, result);
+#endif
 
     return result;
 }
@@ -2063,4 +2095,25 @@ int WINAPIV Hooks_wsprintfW(LPWSTR buffer, LPCWSTR format, ...)
         Utils_getModuleName(_ReturnAddress()), buffer, format, result);
 
     return result;
+}
+
+int WINAPIV Hooks_wsprintfA(LPSTR buffer, LPCSTR format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    int result = wvsprintfA(buffer, format, args);
+    va_end(args);
+
+    Utils_log("%ws: wsprintfA(buffer: %s, format: %s) -> int: %d\n",
+        Utils_getModuleName(_ReturnAddress()), buffer, format, result);
+
+    return result;
+}
+
+VOID WINAPI Hooks_ExitProcess(UINT uExitCode)
+{
+    Utils_log("%ws: ExitProcess(uExitCode: %u) -> VOID\n",
+        Utils_getModuleName(_ReturnAddress()), uExitCode);
+
+    ExitProcess(uExitCode);
 }
